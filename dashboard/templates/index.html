@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Sky-Shield Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0a0e1a;
+      --panel: #111827;
+      --border: #1e2d45;
+      --accent: #00d4ff;
+      --green: #00ff88;
+      --yellow: #ffd700;
+      --red: #ff4444;
+      --orange: #ff8800;
+      --text: #e2e8f0;
+      --muted: #64748b;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Courier New', monospace;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── HEADER ── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 28px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .logo-icon {
+      font-size: 28px;
+    }
+    .logo-text {
+      font-size: 22px;
+      font-weight: bold;
+      color: var(--accent);
+      letter-spacing: 2px;
+    }
+    .logo-sub {
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 3px;
+    }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      border: 1px solid var(--green);
+      color: var(--green);
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+    .time-display {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    /* ── ALERT BANNER ── */
+    .alert-banner {
+      display: none;
+      padding: 12px 28px;
+      background: rgba(255,68,68,0.15);
+      border-bottom: 2px solid var(--red);
+      color: var(--red);
+      font-size: 14px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      animation: flashRed 1s infinite;
+    }
+    @keyframes flashRed {
+      0%, 100% { background: rgba(255,68,68,0.15); }
+      50%       { background: rgba(255,68,68,0.30); }
+    }
+
+    /* ── LAYOUT ── */
+    .main {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      grid-template-rows: auto auto auto;
+      gap: 16px;
+      padding: 20px 24px;
+    }
+
+    /* ── STAT CARDS ── */
+    .stat-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+    }
+    .stat-card.blue::before  { background: var(--accent); }
+    .stat-card.green::before { background: var(--green); }
+    .stat-card.red::before   { background: var(--red); }
+    .stat-card.orange::before{ background: var(--orange); }
+
+    .stat-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--muted);
+    }
+    .stat-value {
+      font-size: 32px;
+      font-weight: bold;
+      color: var(--text);
+    }
+    .stat-value.red    { color: var(--red); }
+    .stat-value.green  { color: var(--green); }
+    .stat-value.orange { color: var(--orange); }
+    .stat-sub {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* ── PANEL ── */
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      overflow: hidden;
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .panel-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--accent);
+    }
+    .panel-badge {
+      font-size: 11px;
+      padding: 2px 10px;
+      border-radius: 12px;
+      background: rgba(0,212,255,0.1);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+    }
+
+    /* ── CHART PANELS ── */
+    .chart-panel    { grid-column: span 3; }
+    .hellinger-panel{ grid-column: span 1; }
+    .bots-panel     { grid-column: span 2; }
+    .log-panel      { grid-column: span 2; }
+    .blocked-panel  { grid-column: span 4; }
+
+    /* ── TABLE ── */
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .data-table th {
+      text-align: left;
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      border-bottom: 1px solid var(--border);
+    }
+    .data-table td {
+      padding: 9px 10px;
+      border-bottom: 1px solid rgba(30,45,69,0.5);
+    }
+    .data-table tr:last-child td {
+      border-bottom: none;
+    }
+    .data-table tr:hover {
+      background: rgba(255,255,255,0.03);
+    }
+
+    /* ── BADGES ── */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: bold;
+      letter-spacing: 1px;
+    }
+    .badge-red    { background: rgba(255,68,68,0.2);   color: var(--red);    border: 1px solid var(--red); }
+    .badge-green  { background: rgba(0,255,136,0.15);  color: var(--green);  border: 1px solid var(--green); }
+    .badge-yellow { background: rgba(255,215,0,0.15);  color: var(--yellow); border: 1px solid var(--yellow); }
+    .badge-blue   { background: rgba(0,212,255,0.1);   color: var(--accent); border: 1px solid var(--accent); }
+    .badge-orange { background: rgba(255,136,0,0.15);  color: var(--orange); border: 1px solid var(--orange); }
+
+    /* ── LOG ── */
+    .log-container {
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    .log-container::-webkit-scrollbar { width: 4px; }
+    .log-container::-webkit-scrollbar-track { background: transparent; }
+    .log-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .log-entry {
+      display: flex;
+      gap: 10px;
+      padding: 6px 0;
+      font-size: 12px;
+      border-bottom: 1px solid rgba(30,45,69,0.4);
+      animation: fadeIn 0.3s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .log-time { color: var(--muted); min-width: 60px; }
+    .log-type { min-width: 80px; }
+    .log-msg  { color: var(--text); }
+
+    /* ── HELLINGER GAUGE ── */
+    .gauge-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .gauge-value {
+      font-size: 42px;
+      font-weight: bold;
+      color: var(--green);
+      transition: color 0.3s;
+    }
+    .gauge-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--muted);
+    }
+    .gauge-bar-track {
+      width: 100%;
+      height: 8px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .gauge-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      background: var(--green);
+      transition: width 0.5s ease, background 0.3s;
+      width: 0%;
+    }
+    .threshold-line {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* ── BLOCK BUTTON ── */
+    .btn {
+      padding: 3px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      border: none;
+      font-family: monospace;
+      font-weight: bold;
+    }
+    .btn-block  { background: rgba(255,68,68,0.2);  color: var(--red);   border: 1px solid var(--red); }
+    .btn-unblock{ background: rgba(0,255,136,0.1); color: var(--green); border: 1px solid var(--green); }
+    .btn:hover  { opacity: 0.8; }
+
+    /* ── PHASE INDICATOR ── */
+    .phase-banner {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      display: none;
+    }
+    .phase-banner.attack { border-color: var(--red); color: var(--red); }
+    .phase-banner.normal { border-color: var(--green); color: var(--green); }
+
+    /* ── SCROLLABLE TABLE ── */
+    .table-scroll {
+      max-height: 260px;
+      overflow-y: auto;
+    }
+    .table-scroll::-webkit-scrollbar { width: 4px; }
+    .table-scroll::-webkit-scrollbar-thumb { background: var(--border); }
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="logo">
+    <span class="logo-icon">🛡️</span>
+    <div>
+      <div class="logo-text">SKY-SHIELD</div>
+      <div class="logo-sub">SKETCH-BASED DDOS DEFENSE SYSTEM</div>
+    </div>
+  </div>
+  <div class="status-badge">
+    <div class="status-dot"></div>
+    MONITORING ACTIVE
+  </div>
+  <div class="time-display" id="clock">--:--:--</div>
+</div>
+
+<!-- ATTACK ALERT BANNER -->
+<div class="alert-banner" id="alertBanner">
+  ⚠ ATTACK DETECTED — HELLINGER DISTANCE THRESHOLD EXCEEDED — MITIGATION ACTIVE
+</div>
+
+<!-- MAIN DASHBOARD -->
+<div class="main">
+
+  <!-- STAT CARDS -->
+  <div class="stat-card blue">
+    <div class="stat-label">Packets / sec</div>
+    <div class="stat-value" id="pps">0</div>
+    <div class="stat-sub">Total: <span id="totalPkts">0</span></div>
+  </div>
+
+  <div class="stat-card red">
+    <div class="stat-label">Attack Events</div>
+    <div class="stat-value red" id="attackEvents">0</div>
+    <div class="stat-sub">Hellinger threshold breaches</div>
+  </div>
+
+  <div class="stat-card orange">
+    <div class="stat-label">Blocked IPs</div>
+    <div class="stat-value orange" id="blockedCount">0</div>
+    <div class="stat-sub">Active blocks</div>
+  </div>
+
+  <div class="stat-card green">
+    <div class="stat-label">Tracked IPs</div>
+    <div class="stat-value green" id="trackedIPs">0</div>
+    <div class="stat-sub">Flagged: <span id="flaggedCount">0</span></div>
+  </div>
+
+  <!-- TRAFFIC CHART -->
+  <div class="panel chart-panel">
+    <div class="panel-header">
+      <div class="panel-title">Live Traffic — Packets / Second</div>
+      <div class="panel-badge" id="severityBadge">NORMAL</div>
+    </div>
+    <canvas id="trafficChart" height="100"></canvas>
+  </div>
+
+  <!-- HELLINGER GAUGE -->
+  <div class="panel hellinger-panel">
+    <div class="panel-header">
+      <div class="panel-title">Hellinger Distance</div>
+    </div>
+    <div class="gauge-container" style="margin-top:12px;">
+      <div class="gauge-value" id="hellingerVal">0.000</div>
+      <div class="gauge-label">Divergence Score</div>
+      <div class="gauge-bar-track" style="margin-top:8px;">
+        <div class="gauge-bar-fill" id="hellingerBar"></div>
+      </div>
+      <div class="threshold-line">Threshold: 0.30</div>
+      <canvas id="hellingerChart" height="120" style="margin-top:16px;"></canvas>
+    </div>
+  </div>
+
+  <!-- BOT TABLE -->
+  <div class="panel bots-panel">
+    <div class="panel-header">
+      <div class="panel-title">Detected Bots / Malicious Hosts</div>
+      <div class="panel-badge" id="botCount">0</div>
+    </div>
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>IP Address</th>
+            <th>Abnormality</th>
+            <th>Requests</th>
+            <th>Trust</th>
+            <th>Action</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="botTable">
+          <tr><td colspan="6" style="color:var(--muted);text-align:center;padding:20px;">Monitoring... No bots detected yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- EVENT LOG -->
+  <div class="panel log-panel">
+    <div class="panel-header">
+      <div class="panel-title">Event Log</div>
+      <button class="btn btn-unblock" onclick="clearLog()">CLEAR</button>
+    </div>
+    <div class="log-container" id="logContainer">
+      <div class="log-entry">
+        <span class="log-time">--:--:--</span>
+        <span class="log-type"><span class="badge badge-blue">SYSTEM</span></span>
+        <span class="log-msg">Sky-Shield dashboard initialized</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- BLOCKED IPS TABLE -->
+  <div class="panel blocked-panel">
+    <div class="panel-header">
+      <div class="panel-title">Currently Blocked IPs</div>
+      <div class="panel-badge" id="blockedTableCount">0 blocked</div>
+    </div>
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>IP Address</th>
+            <th>Block Expires</th>
+            <th>Time Remaining</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="blockedTable">
+          <tr><td colspan="4" style="color:var(--muted);text-align:center;padding:20px;">No IPs currently blocked.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- PHASE INDICATOR -->
+<div class="phase-banner" id="phaseBanner">NORMAL TRAFFIC</div>
+
+<script>
+  const socket = io();
+
+  // ── CLOCK ──
+  function updateClock() {
+    document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+  }
+  setInterval(updateClock, 1000);
+  updateClock();
+
+  // ── CHARTS ──
+  const trafficCtx = document.getElementById('trafficChart').getContext('2d');
+  const trafficData = { labels: [], datasets: [{
+    label: 'Packets/s',
+    data: [],
+    borderColor: '#00d4ff',
+    backgroundColor: 'rgba(0,212,255,0.08)',
+    tension: 0.4,
+    fill: true,
+    pointRadius: 0,
+    borderWidth: 2,
+  }, {
+    label: 'Attack Traffic',
+    data: [],
+    borderColor: '#ff4444',
+    backgroundColor: 'rgba(255,68,68,0.06)',
+    tension: 0.4,
+    fill: true,
+    pointRadius: 0,
+    borderWidth: 2,
+  }]};
+  const trafficChart = new Chart(trafficCtx, {
+    type: 'line',
+    data: trafficData,
+    options: {
+      responsive: true,
+      animation: false,
+      plugins: { legend: { labels: { color: '#64748b', font: { size: 11 }}}},
+      scales: {
+        x: { ticks: { color: '#64748b', maxTicksLimit: 8 }, grid: { color: 'rgba(255,255,255,0.03)' }},
+        y: { ticks: { color: '#64748b' }, grid: { color: 'rgba(255,255,255,0.03)' }, min: 0 }
+      }
+    }
+  });
+
+  const hCtx = document.getElementById('hellingerChart').getContext('2d');
+  const hData = { labels: [], datasets: [{
+    label: 'Hellinger',
+    data: [],
+    borderColor: '#00ff88',
+    backgroundColor: 'rgba(0,255,136,0.08)',
+    tension: 0.4,
+    fill: true,
+    pointRadius: 0,
+    borderWidth: 2,
+  }, {
+    label: 'Threshold',
+    data: [],
+    borderColor: '#ff4444',
+    borderDash: [5,3],
+    pointRadius: 0,
+    borderWidth: 1,
+    fill: false,
+  }]};
+  const hChart = new Chart(hCtx, {
+    type: 'line',
+    data: hData,
+    options: {
+      responsive: true,
+      animation: false,
+      plugins: { legend: { display: false }},
+      scales: {
+        x: { display: false },
+        y: { ticks: { color: '#64748b', font: { size: 10 }}, grid: { color: 'rgba(255,255,255,0.03)' }, min: 0, max: 1.0 }
+      }
+    }
+  });
+
+  const MAX_CHART_POINTS = 30;
+  let isAttack = false;
+  let attackPacketsApprox = 0;
+
+  function pushToChart(chart, label, ...values) {
+    chart.data.labels.push(label);
+    values.forEach((v, i) => chart.data.datasets[i].data.push(v));
+    if (chart.data.labels.length > MAX_CHART_POINTS) {
+      chart.data.labels.shift();
+      chart.data.datasets.forEach(d => d.data.shift());
+    }
+    chart.update('none');
+  }
+
+  // ── STATS UPDATE ──
+  function updateStats(data) {
+    document.getElementById('pps').textContent         = data.packets_per_second || 0;
+    document.getElementById('totalPkts').textContent   = (data.total_packets || 0).toLocaleString();
+    document.getElementById('attackEvents').textContent= data.attack_events || 0;
+    document.getElementById('blockedCount').textContent= data.currently_blocked || 0;
+    document.getElementById('trackedIPs').textContent  = data.total_tracked || 0;
+    document.getElementById('flaggedCount').textContent= data.flagged || 0;
+
+    const pps = data.packets_per_second || 0;
+    const attackPps = isAttack ? Math.round(attackPacketsApprox) : 0;
+    pushToChart(trafficChart, data.timestamp || '', pps, attackPps);
+  }
+
+  // ── HELLINGER UPDATE ──
+  function updateHellinger(distance) {
+    const val = parseFloat(distance).toFixed(3);
+    const pct = Math.min(100, (distance / 1.0) * 100).toFixed(1);
+    const el = document.getElementById('hellingerVal');
+    const bar = document.getElementById('hellingerBar');
+    const badge = document.getElementById('severityBadge');
+    const alert = document.getElementById('alertBanner');
+
+    el.textContent = val;
+    bar.style.width = pct + '%';
+
+    if (distance >= 0.30) {
+      el.style.color = '#ff4444';
+      bar.style.background = '#ff4444';
+      badge.textContent = '⚠ ATTACK';
+      badge.style.background = 'rgba(255,68,68,0.15)';
+      badge.style.borderColor = '#ff4444';
+      badge.style.color = '#ff4444';
+      alert.style.display = 'block';
+      isAttack = true;
+    } else if (distance >= 0.15) {
+      el.style.color = '#ffd700';
+      bar.style.background = '#ffd700';
+      badge.textContent = '⚡ SUSPICIOUS';
+      badge.style.background = 'rgba(255,215,0,0.1)';
+      badge.style.borderColor = '#ffd700';
+      badge.style.color = '#ffd700';
+      alert.style.display = 'none';
+      isAttack = false;
+    } else {
+      el.style.color = '#00ff88';
+      bar.style.background = '#00ff88';
+      badge.textContent = '✓ NORMAL';
+      badge.style.background = 'rgba(0,255,136,0.1)';
+      badge.style.borderColor = '#00ff88';
+      badge.style.color = '#00ff88';
+      alert.style.display = 'none';
+      isAttack = false;
+    }
+
+    const t = new Date().toLocaleTimeString();
+    pushToChart(hChart, t, distance, 0.30);
+  }
+
+  // ── BOT TABLE ──
+  const botMap = new Map();
+  function addBot(data) {
+    botMap.set(data.ip, data);
+    document.getElementById('botCount').textContent = botMap.size;
+    renderBotTable();
+  }
+  function renderBotTable() {
+    const tbody = document.getElementById('botTable');
+    const bots = Array.from(botMap.values()).slice(-20).reverse();
+    if (bots.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);text-align:center;padding:20px;">No bots detected yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = bots.map(b => {
+      const action = b.action || 'MONITOR';
+      const badgeCls = action === 'BLOCK' ? 'badge-red' : action === 'CAPTCHA' ? 'badge-yellow' : 'badge-blue';
+      const trust = b.trust || 50;
+      const trustColor = trust > 70 ? '#00ff88' : trust > 30 ? '#ffd700' : '#ff4444';
+      return `<tr>
+        <td style="font-family:monospace;color:var(--accent)">${b.ip}</td>
+        <td>${parseFloat(b.abnormality_score || b.score || 0).toFixed(1)}</td>
+        <td>${b.request_count || 0}</td>
+        <td style="color:${trustColor}">${trust}</td>
+        <td><span class="badge ${badgeCls}">${action}</span></td>
+        <td><button class="btn btn-block" onclick="blockIP('${b.ip}')">BLOCK</button></td>
+      </tr>`;
+    }).join('');
+  }
+
+  // ── BLOCKED TABLE ──
+  function refreshBlockedTable() {
+    fetch('/api/blocks').then(r => r.json()).then(blocks => {
+      const tbody = document.getElementById('blockedTable');
+      document.getElementById('blockedTableCount').textContent = blocks.length + ' blocked';
+      if (blocks.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted);text-align:center;padding:20px;">No IPs currently blocked.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = blocks.map(b => `
+        <tr>
+          <td style="font-family:monospace;color:#ff4444">${b.ip}</td>
+          <td>${b.expires_at}</td>
+          <td>${b.expires_in}s remaining</td>
+          <td><button class="btn btn-unblock" onclick="unblockIP('${b.ip}')">UNBLOCK</button></td>
+        </tr>`).join('');
+    });
+  }
+  setInterval(refreshBlockedTable, 5000);
+
+  // ── LOG ──
+  function addLog(type, msg, color) {
+    const container = document.getElementById('logContainer');
+    const badgeCls = color || (
+      type === 'attack' ? 'badge-red' :
+      type === 'blocked' ? 'badge-orange' :
+      type === 'stats' ? 'badge-blue' :
+      type === 'suspicious' ? 'badge-yellow' : 'badge-blue'
+    );
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.innerHTML = `
+      <span class="log-time">${new Date().toLocaleTimeString()}</span>
+      <span class="log-type"><span class="badge ${badgeCls}">${type.toUpperCase()}</span></span>
+      <span class="log-msg">${msg}</span>`;
+    container.insertBefore(entry, container.firstChild);
+    if (container.children.length > 100) container.removeChild(container.lastChild);
+  }
+  function clearLog() {
+    document.getElementById('logContainer').innerHTML = '';
+  }
+
+  // ── MANUAL BLOCK/UNBLOCK ──
+  function blockIP(ip) {
+    fetch('/api/block', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ip, duration: 300})
+    }).then(() => {
+      addLog('manual_block', `Manually blocked ${ip}`, 'badge-orange');
+      refreshBlockedTable();
+    });
+  }
+  function unblockIP(ip) {
+    fetch('/api/unblock', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ip})
+    }).then(() => {
+      addLog('unblock', `Unblocked ${ip}`, 'badge-green');
+      refreshBlockedTable();
+    });
+  }
+
+  // ── SOCKET.IO EVENTS ──
+  socket.on('connect', () => {
+    addLog('system', 'Connected to Sky-Shield', 'badge-green');
+  });
+
+  socket.on('stats', data => updateStats(data));
+
+  socket.on('alert', data => {
+    updateHellinger(data.distance);
+    addLog('alert', `⚠ ${data.severity} — H=${data.distance} | Bots=${data.bots_found}`, 'badge-red');
+  });
+
+  socket.on('attack', data => {
+    addBot(data);
+    attackPacketsApprox = data.score || 100;
+    addLog('attack', `Bot detected: ${data.ip} (score: ${(data.score||0).toFixed(1)}) → ${data.action}`, 'badge-red');
+    refreshBlockedTable();
+  });
+
+  socket.on('suspicious', data => {
+    addBot(data);
+    addLog('suspicious', `Suspicious: ${data.ip} → ${data.action}`, 'badge-yellow');
+  });
+
+  socket.on('blocked', data => {
+    addLog('blocked', `Blocked: ${data.ip} (${data.reason})`, 'badge-orange');
+    refreshBlockedTable();
+  });
+
+  socket.on('manual_block', data => {
+    addLog('blocked', `Manual block: ${data.ip}`, 'badge-orange');
+    refreshBlockedTable();
+  });
+
+  socket.on('sim_phase', data => {
+    const banner = document.getElementById('phaseBanner');
+    banner.textContent = `SIM: ${data.phase} (${data.duration}s)`;
+    banner.className = `phase-banner ${data.is_attack ? 'attack' : 'normal'}`;
+    banner.style.display = 'block';
+    addLog('sim', `Phase: ${data.phase}`, data.is_attack ? 'badge-red' : 'badge-green');
+    if (!data.is_attack) isAttack = false;
+  });
+
+  socket.on('log_entry', entry => {
+    if (entry.type === 'stats') return; // skip frequent stats events in log
+  });
+
+  // ── PERIODIC REFRESH ──
+  setInterval(() => socket.emit('request_stats'), 3000);
+  setInterval(refreshBlockedTable, 8000);
+
+  // ── INITIAL LOAD ──
+  fetch('/api/bots').then(r => r.json()).then(bots => {
+    bots.forEach(b => botMap.set(b.ip, b));
+    renderBotTable();
+  });
+  refreshBlockedTable();
+</script>
+</body>
+</html>

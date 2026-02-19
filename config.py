@@ -30,7 +30,7 @@ WHITELIST_THRESHOLD = 80   # Trust above this → whitelisted
 # ─────────────────────────────────────────────
 #  NETWORK SETTINGS
 # ─────────────────────────────────────────────
-MONITOR_INTERFACE = "eth0"        # Network interface to monitor (change to your NIC)
+MONITOR_INTERFACE = "wlan0"        # Network interface to monitor (change to your NIC)
 MONITOR_PORT = 80                  # HTTP port to monitor
 HTTPS_PORT = 443
 REQUEST_RATE_LIMIT = 100           # Max requests per IP per window before flagging
