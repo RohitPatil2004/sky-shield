@@ -1,58 +1,60 @@
-# ─────────────────────────────────────────────
-#  SKETCH CONFIGURATION
-# ─────────────────────────────────────────────
-SKETCH_ROWS = 4          # Number of hash functions (rows in sketch table)
-SKETCH_COLS = 1024       # Number of columns (buckets per row)
-SKETCH_WINDOW = 5        # Time window in seconds for each sketch snapshot
+"""
+sky-shield/config.py
+
+Central Configuration
+=====================
+All tunable parameters for Sky-Shield in one place.
+"""
 
 # ─────────────────────────────────────────────
-#  HELLINGER DISTANCE THRESHOLD
+#  Network Interface
 # ─────────────────────────────────────────────
-# Divergence threshold - if Hellinger distance exceeds this, attack is detected
-# Range: [0.0, 1.0]
-HELLINGER_THRESHOLD = 0.3
+MONITOR_INTERFACE = "eth0"      # Interface to sniff on
+MONITOR_PORT     = 80           # HTTP port
+HTTPS_PORT       = 443          # HTTPS port
 
 # ─────────────────────────────────────────────
-#  BLOOM FILTER CONFIGURATION
+#  Sketch Parameters
 # ─────────────────────────────────────────────
-BLOOM_CAPACITY = 100000   # Expected number of IPs to store
-BLOOM_ERROR_RATE = 0.001  # False positive rate (0.1%)
+SKETCH_ROWS   = 4               # Number of hash functions (rows in sketch table)
+SKETCH_COLS   = 1024            # Number of columns (buckets per row)
+SKETCH_WINDOW = 5               # Time window in seconds for each sketch snapshot
 
 # ─────────────────────────────────────────────
-#  TRUST VALUE SYSTEM
+#  Hellinger Distance Threshold
 # ─────────────────────────────────────────────
-INITIAL_TRUST = 100        # Starting trust value for each IP
-TRUST_DECREMENT = 10       # Deducted per suspicious request
-TRUST_INCREMENT = 2        # Added per legitimate request
-BLACKLIST_THRESHOLD = 30   # Trust below this → blacklisted
-WHITELIST_THRESHOLD = 80   # Trust above this → whitelisted
+HELLINGER_THRESHOLD = 0.3       # Distance above this → attack declared
 
 # ─────────────────────────────────────────────
-#  NETWORK SETTINGS
+#  Trust / Bloom Filter Parameters
 # ─────────────────────────────────────────────
-MONITOR_INTERFACE = "wlan0"        # Network interface to monitor (change to your NIC)
-MONITOR_PORT = 80                  # HTTP port to monitor
-HTTPS_PORT = 443
-REQUEST_RATE_LIMIT = 100           # Max requests per IP per window before flagging
+BLOOM_CAPACITY    = 10000       # Expected number of unique IPs
+BLOOM_ERROR_RATE  = 0.01        # Acceptable false positive rate
+
+INITIAL_TRUST       = 100       # Starting trust value for each IP
+TRUST_DECREMENT     = 10        # Deducted per suspicious hit
+TRUST_INCREMENT     = 5         # Added per clean request
+
+# Raised 30 → 50: bots with score=60 drop to trust=40, which is now ≤ threshold → BLOCK
+BLACKLIST_THRESHOLD = 50        # Trust at or below this → blacklisted
+WHITELIST_THRESHOLD = 90        # Trust at or above this → whitelisted
 
 # ─────────────────────────────────────────────
-#  BLOCKING
+#  Blocking
 # ─────────────────────────────────────────────
-AUTO_BLOCK = True                  # Automatically apply iptables rules
-BLOCK_DURATION = 300               # Seconds to block an IP (5 minutes)
-USE_IPTABLES = True                # Use iptables for real blocking (requires root)
+BLOCK_DURATION = 300            # Seconds to block an IP (5 minutes)
+
+# Set False: iptables requires root; soft-block dict is sufficient for simulation
+USE_IPTABLES   = False          # Use iptables for real blocking (requires root)
 
 # ─────────────────────────────────────────────
-#  DASHBOARD
+#  Bot Detection
 # ─────────────────────────────────────────────
-DASHBOARD_HOST = "0.0.0.0"
-DASHBOARD_PORT = 5000
-DASHBOARD_DEBUG = False
-LOG_FILE = "logs/skyshield.log"
-MAX_LOG_ENTRIES = 1000             # Max events to keep in memory for dashboard
+REQUEST_RATE_LIMIT = 100        # Max requests per SKETCH_WINDOW before flagged
+AUTO_BLOCK         = True       # Automatically block detected bots
 
 # ─────────────────────────────────────────────
-#  CAPTCHA (Soft mitigation)
+#  Dashboard Server
 # ─────────────────────────────────────────────
-ENABLE_CAPTCHA = True              # Issue CAPTCHA challenge before hard block
-CAPTCHA_ATTEMPTS = 3               # Failed attempts before hard block
+DASHBOARD_HOST = "0.0.0.0"     # Host to bind the Flask dashboard
+DASHBOARD_PORT = 5000           # Port for the web dashboard

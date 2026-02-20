@@ -27,14 +27,12 @@ try:
     from scapy.all import sniff, Raw
     SCAPY_AVAILABLE = True
 except ImportError:
-    # Fallback for static analysis (these won't be used if import fails)
-    IP = None  # type: ignore
-    TCP = None  # type: ignore
-    sniff = None  # type: ignore
-    Raw = None  # type: ignore
+    IP = None       # type: ignore
+    TCP = None      # type: ignore
+    sniff = None    # type: ignore
+    Raw = None      # type: ignore
     SCAPY_AVAILABLE = False
 
-# Type alias for sniff function
 SniffFunc = t.Optional[t.Callable[..., t.Any]]
 
 from core.sketch import Sketch
@@ -55,19 +53,12 @@ logger = logging.getLogger("skyshield.sniffer")
 class TrafficSniffer:
     """
     Captures HTTP packets, updates sketches, and triggers detection pipeline.
-
-    Flow:
-      1. Packet arrives → extract source IP
-      2. Update current_sketch with IP
-      3. Every SKETCH_WINDOW seconds → compare with baseline_sketch
-      4. If Hellinger distance > threshold → alert + identify bots
-      5. Rotate sketches (current becomes new baseline)
     """
 
     def __init__(self, trust_manager: TrustManager, bot_detector: BotDetector, event_bus=None):
         self.trust_manager = trust_manager
         self.bot_detector = bot_detector
-        self.event_bus = event_bus  # Optional callback for dashboard updates
+        self.event_bus = event_bus
 
         self.baseline_sketch = Sketch()
         self.current_sketch = Sketch()
@@ -75,14 +66,14 @@ class TrafficSniffer:
         self._running = False
         self._sniff_thread = None
         self._rotate_thread = None
+        self._stats_thread = None
 
-        self._seen_ips: set = set()  # IPs in current window
+        self._seen_ips: set = set()
         self._packet_count = 0
         self._attack_count = 0
         self._blocked_count = 0
         self._lock = threading.Lock()
 
-        # Rate tracking
         self._packets_per_second = 0
         self._last_rate_calc = time.time()
         self._packets_since_last_calc = 0
@@ -95,7 +86,6 @@ class TrafficSniffer:
 
             src_ip = pkt[IP].src
 
-            # Filter: only process HTTP/HTTPS packets
             if pkt.haslayer(TCP):
                 dport = pkt[TCP].dport
                 sport = pkt[TCP].sport
@@ -103,19 +93,16 @@ class TrafficSniffer:
                     return
 
             with self._lock:
-                # Update sketch
                 self.current_sketch.update(src_ip)
                 self._seen_ips.add(src_ip)
                 self._packet_count += 1
                 self._packets_since_last_calc += 1
 
-            # Quick per-packet checks
             is_rate_abuser = self.bot_detector.record_request(src_ip)
             if is_rate_abuser:
                 self.trust_manager.record_suspicious(src_ip)
                 logger.warning(f"Rate abuse detected: {src_ip}")
 
-            # Bloom filter fast-path
             if self.trust_manager.is_blacklisted(src_ip):
                 self._emit_event("blocked", {"ip": src_ip, "reason": "blacklist"})
 
@@ -125,87 +112,115 @@ class TrafficSniffer:
     def _rotate_and_analyze(self):
         """
         Periodically rotate sketches and run Hellinger analysis.
-        Runs every SKETCH_WINDOW seconds in a background thread.
+        The entire loop body is wrapped in try/except so that no exception
+        can silently kill this thread — it is the core detection engine.
         """
+        warmup_windows = 1
+        window_count = 0
+
         while self._running:
-            time.sleep(SKETCH_WINDOW)
-            if not self._running:
-                break
+            try:
+                time.sleep(SKETCH_WINDOW)
+                if not self._running:
+                    break
 
-            with self._lock:
-                # Calculate divergence between baseline and current
-                result = sketch_divergence(self.baseline_sketch, self.current_sketch)
-                candidate_ips = list(self._seen_ips)
+                window_count += 1
 
-                # Update packets/sec
-                elapsed = time.time() - self._last_rate_calc
-                if elapsed > 0:
-                    self._packets_per_second = int(
-                        self._packets_since_last_calc / elapsed
-                    )
-                self._packets_since_last_calc = 0
-                self._last_rate_calc = time.time()
+                with self._lock:
+                    result = sketch_divergence(self.baseline_sketch, self.current_sketch)
+                    candidate_ips = list(self._seen_ips)
 
-            logger.info(
-                f"[SKETCH ROTATE] Distance={result['distance']:.4f} "
-                f"Severity={result['severity']} "
-                f"Packets/s={self._packets_per_second}"
-            )
+                    elapsed = time.time() - self._last_rate_calc
+                    if elapsed > 0:
+                        self._packets_per_second = int(
+                            self._packets_since_last_calc / elapsed
+                        )
+                    self._packets_since_last_calc = 0
+                    self._last_rate_calc = time.time()
 
-            if result["is_attack"]:
-                self._attack_count += 1
-                logger.warning(
-                    f"[ATTACK DETECTED] Hellinger={result['distance']:.4f} "
-                    f"| Threshold={result['threshold']}"
+                    if window_count <= warmup_windows:
+                        logger.info("[SKETCH ROTATE] Warmup window — skipping analysis")
+                        self.baseline_sketch = self.current_sketch.clone()
+                        self.current_sketch.reset()
+                        self._seen_ips.clear()
+                        continue
+
+                logger.info(
+                    f"[SKETCH ROTATE] Distance={result['distance']:.4f} "
+                    f"Severity={result['severity']} "
+                    f"Packets/s={self._packets_per_second}"
                 )
 
-                # Identify malicious hosts using abnormal sketch
-                with self._lock:
-                    bots = self.bot_detector.identify_malicious_hosts(
-                        self.baseline_sketch,
-                        self.current_sketch,
-                        candidate_ips,
+                if result["is_attack"]:
+                    self._attack_count += 1
+                    logger.warning(
+                        f"[ATTACK DETECTED] Hellinger={result['distance']:.4f} "
+                        f"| Threshold={result['threshold']}"
                     )
 
-                for bot in bots:
-                    if bot["action"] == "BLOCK":
-                        self._blocked_count += 1
-                        self._emit_event("attack", {
-                            "ip": bot["ip"],
-                            "score": bot["abnormality_score"],
-                            "action": "BLOCK",
-                            "distance": result["distance"],
-                        })
-                    else:
-                        self._emit_event("suspicious", {
-                            "ip": bot["ip"],
-                            "score": bot["abnormality_score"],
-                            "action": bot["action"],
-                            "distance": result["distance"],
-                        })
+                    with self._lock:
+                        bots = self.bot_detector.identify_malicious_hosts(
+                            self.baseline_sketch,
+                            self.current_sketch,
+                            candidate_ips,
+                        )
 
-                self._emit_event("alert", {
-                    "severity": result["severity"],
-                    "distance": result["distance"],
-                    "bots_found": len(bots),
-                    "timestamp": time.strftime("%H:%M:%S"),
-                })
-            else:
-                # Traffic is clean → reward visible IPs
-                for ip in list(self._seen_ips)[:50]:
-                    self.trust_manager.record_clean(ip)
+                    block_count = sum(1 for b in bots if b.get("action") == "BLOCK")
+                    logger.info(
+                        f"[BOT ANALYSIS] {len(bots)} bots found, {block_count} to BLOCK. "
+                        + (
+                            f"Top: {bots[0]['ip']} score={bots[0]['abnormality_score']:.1f} "
+                            f"trust={bots[0].get('trust', '?')} action={bots[0].get('action', 'NONE')}"
+                            if bots else "no bots"
+                        )
+                    )
 
-            # Rotate: current becomes the new baseline
-            with self._lock:
-                self.baseline_sketch = self.current_sketch.clone()
-                self.current_sketch.reset()
-                self._seen_ips.clear()
+                    for bot in bots:
+                        # Use .get() — entries with score=0 never have "action" set
+                        action = bot.get("action", "MONITOR")
+                        if action == "BLOCK":
+                            self._blocked_count += 1
+                            self._emit_event("attack", {
+                                "ip": bot["ip"],
+                                "score": bot["abnormality_score"],
+                                "action": "BLOCK",
+                                "distance": result["distance"],
+                            })
+                        else:
+                            self._emit_event("suspicious", {
+                                "ip": bot["ip"],
+                                "score": bot["abnormality_score"],
+                                "action": action,
+                                "distance": result["distance"],
+                            })
 
-            # Emit stats update
+                    self._emit_event("alert", {
+                        "severity": result["severity"],
+                        "distance": result["distance"],
+                        "bots_found": len(bots),
+                        "timestamp": time.strftime("%H:%M:%S"),
+                    })
+                else:
+                    for ip in list(self._seen_ips)[:50]:
+                        self.trust_manager.record_clean(ip)
+
+                with self._lock:
+                    self.baseline_sketch = self.current_sketch.clone()
+                    self.current_sketch.reset()
+                    self._seen_ips.clear()
+
+                self._emit_event("stats", self.get_stats())
+                self.bot_detector.purge_stale_entries()
+
+            except Exception as e:
+                # Log but NEVER let the rotate thread die — it is the detection engine
+                logger.exception(f"[SKETCH ROTATE ERROR] {e} — thread continuing")
+
+    def _stats_emitter(self):
+        """Emit stats to dashboard every 2 seconds."""
+        while self._running:
+            time.sleep(2)
             self._emit_event("stats", self.get_stats())
-
-            # Cleanup
-            self.bot_detector.purge_stale_entries()
 
     def _emit_event(self, event_type: str, data: dict):
         """Push an event to the dashboard event bus (if connected)."""
@@ -224,16 +239,19 @@ class TrafficSniffer:
 
         self._running = True
 
-        # Start sketch rotation thread
         self._rotate_thread = threading.Thread(
             target=self._rotate_and_analyze, daemon=True
         )
         self._rotate_thread.start()
 
-        # Start Scapy sniffer in background thread
+        self._stats_thread = threading.Thread(
+            target=self._stats_emitter, daemon=True
+        )
+        self._stats_thread.start()
+
         filter_str = f"tcp and (port {MONITOR_PORT} or port {HTTPS_PORT})"
         self._sniff_thread = threading.Thread(
-            target=lambda: sniff(  # type: ignore[operator]
+            target=lambda: sniff(           # type: ignore[operator]
                 iface=interface,
                 filter=filter_str,
                 prn=self._process_packet,
@@ -246,10 +264,7 @@ class TrafficSniffer:
         logger.info(f"Sky-Shield sniffer started on {interface}:{MONITOR_PORT}")
 
     def _start_simulation(self):
-        """
-        Simulation mode — generates synthetic traffic for testing
-        when no real network traffic is available or no root privileges.
-        """
+        """Simulation mode — generates synthetic traffic for testing."""
         from simulator.attack_sim import TrafficSimulator
         self._running = True
 
@@ -257,6 +272,11 @@ class TrafficSniffer:
             target=self._rotate_and_analyze, daemon=True
         )
         self._rotate_thread.start()
+
+        self._stats_thread = threading.Thread(
+            target=self._stats_emitter, daemon=True
+        )
+        self._stats_thread.start()
 
         sim = TrafficSimulator(self)
         self._sim_thread = threading.Thread(
@@ -271,29 +291,39 @@ class TrafficSniffer:
         logger.info("Sky-Shield sniffer stopped.")
 
     def inject_packet(self, src_ip: str, count: int = 1):
-        """
-        Manually inject a simulated packet — used by simulator and unit tests.
-        """
+        """Manually inject a simulated packet — used by simulator and unit tests."""
         with self._lock:
             self.current_sketch.update(src_ip, count)
             self._seen_ips.add(src_ip)
             self._packet_count += count
             self._packets_since_last_calc += count
 
-        self.bot_detector.record_request(src_ip)
+        is_rate_abuser = self.bot_detector.record_request(src_ip)
 
         if self.trust_manager.is_blacklisted(src_ip):
             self._blocked_count += 1
+            self._emit_event("blocked", {"ip": src_ip, "reason": "blacklist"})
+        elif is_rate_abuser:
+            self.trust_manager.record_suspicious(src_ip)
+        else:
+            self.trust_manager.record_clean(src_ip)
 
     def get_stats(self) -> dict:
         """Return current runtime statistics."""
+        trust_stats = self.trust_manager.get_stats()
         return {
             "total_packets": self._packet_count,
             "packets_per_second": self._packets_per_second,
             "attack_events": self._attack_count,
             "blocked_ips": self._blocked_count,
-            "tracked_ips": len(self.trust_manager._trust),
-            "flagged_ips": len(self.trust_manager._flagged_ips),
+            "currently_blocked": trust_stats["blacklisted"],
+            "tracked_ips": trust_stats["total_tracked"],
+            "total_tracked": trust_stats["total_tracked"],
+            "flagged_ips": trust_stats["flagged"],
+            "flagged": trust_stats["flagged"],
+            "blacklisted_ips": trust_stats["blacklisted"],
+            "blacklisted": trust_stats["blacklisted"],
+            "whitelisted_ips": trust_stats["whitelisted_approx"],
             "running": self._running,
             "timestamp": time.strftime("%H:%M:%S"),
         }

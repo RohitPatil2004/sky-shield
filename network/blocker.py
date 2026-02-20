@@ -49,15 +49,20 @@ class IPBlocker:
         """
         Block an IP address for a given duration.
         Applies an iptables DROP rule (if enabled) and records the block.
+
+        If the IP is already blocked, extends the expiry time.
+        If the IP was previously unblocked (deleted from _blocked), it is
+        re-added as a fresh entry so the dashboard shows it again.
         """
         with self._lock:
             if ip in self._blocked:
-                # Extend the block duration
+                # Extend the block — IP already visible in dashboard
                 self._blocked[ip] = max(
                     self._blocked[ip], time.time() + duration
                 )
                 return
 
+            # Fresh block or re-block after manual unblock cleared _blocked
             self._blocked[ip] = time.time() + duration
             self._block_log.append({
                 "ip": ip,
@@ -79,6 +84,8 @@ class IPBlocker:
     def unblock(self, ip: str):
         """
         Unblock an IP address (remove iptables rule).
+        Deletes from _blocked so that a subsequent block() call creates
+        a fresh entry and the dashboard shows the re-block.
         """
         with self._lock:
             if ip not in self._blocked:
@@ -175,11 +182,6 @@ class IPBlocker:
         if not self.use_iptables:
             return
         try:
-            # List and delete only sky-shield rules
-            result = subprocess.run(
-                [self.IPTABLES, "-L", self.CHAIN, "-n", "--line-numbers"],
-                capture_output=True, text=True
-            )
             for ip in list(self._blocked.keys()):
                 self.unblock(ip)
             logger.info("All sky-shield iptables rules flushed.")
@@ -187,9 +189,9 @@ class IPBlocker:
             logger.error(f"Flush error: {e}")
 
     def get_stats(self) -> dict:
-        """Return blocker statistics."""
         return {
             "currently_blocked": len(self.get_blocked_list()),
             "total_blocks": len(self._block_log),
             "iptables_enabled": self.use_iptables,
+            "blocked_ips": len(self.get_blocked_list()),
         }

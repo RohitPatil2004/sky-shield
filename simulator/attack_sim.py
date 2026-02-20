@@ -24,9 +24,13 @@ logger = logging.getLogger("skyshield.simulator")
 
 
 def random_ip(prefix: Optional[str] = None) -> str:
-    """Generate a random IPv4 address, optionally from a given prefix."""
+    """Generate a random IPv4 address, optionally from a given prefix.
+
+    FIX: Strip trailing dot before splitting so "192.168." doesn't produce
+    an empty string part, which caused malformed IPs like "192.168..200".
+    """
     if prefix:
-        parts = prefix.split(".")
+        parts = prefix.rstrip(".").split(".")
         while len(parts) < 4:
             parts.append(str(random.randint(1, 254)))
         return ".".join(parts[:4])
@@ -41,10 +45,10 @@ class TrafficSimulator:
 
     PHASES = [
         {"name": "NORMAL",      "duration": 15, "normal_ips": 50,  "normal_rps": 20,  "attack": False},
-        {"name": "DDOS_ATTACK", "duration": 20, "normal_ips": 50,  "normal_rps": 10,  "attack": True,  "bot_count": 20,  "bot_rps": 200},
+        {"name": "DDOS_ATTACK", "duration": 20, "normal_ips": 50,  "normal_rps": 10,  "attack": True,  "bot_count": 20, "bot_rps": 200},
         {"name": "NORMAL",      "duration": 15, "normal_ips": 50,  "normal_rps": 20,  "attack": False},
         {"name": "FLASH_CROWD", "duration": 15, "normal_ips": 300, "normal_rps": 80,  "attack": False},
-        {"name": "SLOW_LORIS",  "duration": 15, "normal_ips": 40,  "normal_rps": 15,  "attack": True,  "bot_count": 5,   "bot_rps": 30},
+        {"name": "SLOW_LORIS",  "duration": 15, "normal_ips": 40,  "normal_rps": 15,  "attack": True,  "bot_count": 5,  "bot_rps": 30},
         {"name": "NORMAL",      "duration": 20, "normal_ips": 50,  "normal_rps": 20,  "attack": False},
     ]
 
@@ -54,7 +58,8 @@ class TrafficSimulator:
 
         # Generate stable pools of IPs
         self.normal_ip_pool = [random_ip() for _ in range(500)]
-        self.bot_ip_pool = [random_ip("192.168.") for _ in range(50)]  # Internal looking bots
+        # FIX: rstrip ensures "192.168." → parts ["192","168"] → valid "192.168.x.y"
+        self.bot_ip_pool = [random_ip("192.168.") for _ in range(50)]
 
     def run(self):
         """Main simulation loop — cycles through phases indefinitely."""

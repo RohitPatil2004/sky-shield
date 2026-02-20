@@ -556,6 +556,7 @@
   const MAX_CHART_POINTS = 30;
   let isAttack = false;
   let attackPacketsApprox = 0;
+  let normalBaseline = 25;
 
   function pushToChart(chart, label, ...values) {
     chart.data.labels.push(label);
@@ -572,12 +573,14 @@
     document.getElementById('pps').textContent         = data.packets_per_second || 0;
     document.getElementById('totalPkts').textContent   = (data.total_packets || 0).toLocaleString();
     document.getElementById('attackEvents').textContent= data.attack_events || 0;
-    document.getElementById('blockedCount').textContent= data.currently_blocked || 0;
-    document.getElementById('trackedIPs').textContent  = data.total_tracked || 0;
-    document.getElementById('flaggedCount').textContent= data.flagged || 0;
+    document.getElementById('blockedCount').textContent= data.currently_blocked || data.blacklisted || 0;
+    document.getElementById('trackedIPs').textContent  = data.total_tracked || data.tracked_ips || 0;
+    document.getElementById('flaggedCount').textContent= data.flagged || data.flagged_ips || 0;
 
     const pps = data.packets_per_second || 0;
-    const attackPps = isAttack ? Math.round(attackPacketsApprox) : 0;
+    // Attack traffic = portion of PPS during attack phases
+    const attackPps = isAttack ? Math.max(0, pps - normalBaseline) : 0;
+    normalBaseline = isAttack ? normalBaseline : Math.min(normalBaseline, pps || normalBaseline);
     pushToChart(trafficChart, data.timestamp || '', pps, attackPps);
   }
 
@@ -735,6 +738,7 @@
   socket.on('attack', data => {
     addBot(data);
     attackPacketsApprox = data.score || 100;
+    isAttack = true;
     addLog('attack', `Bot detected: ${data.ip} (score: ${(data.score||0).toFixed(1)}) → ${data.action}`, 'badge-red');
     refreshBlockedTable();
   });

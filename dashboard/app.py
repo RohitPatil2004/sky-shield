@@ -61,9 +61,19 @@ def push_event(event_type: str, data: dict):
     if len(_event_log) > _MAX_EVENTS:
         _event_log = _event_log[-_MAX_EVENTS:]
 
-    # Auto-block if attack event
+    # Auto-block if attack event.
+    # Block BEFORE emitting so that when the frontend's refreshBlockedTable()
+    # fetch fires (triggered by the attack socket event), the IP is already
+    # in _blocked and will appear in the response.
     if event_type == "attack" and _blocker and data.get("ip"):
-        _blocker.block(data["ip"], reason="SkyShield Auto-Block")
+        ip = data["ip"]
+        _blocker.block(ip, reason="SkyShield Auto-Block")
+        # Also emit a dedicated 'blocked' event so the frontend's
+        # socket.on('blocked', ...) handler fires and refreshes the table
+        try:
+            socketio.emit("blocked", {"ip": ip, "reason": "SkyShield Auto-Block"})
+        except Exception as e:
+            logger.error(f"SocketIO blocked emit error: {e}")
 
     try:
         socketio.emit(event_type, data)
@@ -90,8 +100,15 @@ def api_stats():
     if not _sniffer:
         return jsonify({"error": "Not initialized"}), 503
     stats = _sniffer.get_stats()
-    stats.update(_blocker.get_stats() if _blocker else {})
-    stats.update(_trust_manager.get_stats() if _trust_manager else {})
+    if _blocker:
+        blocker_stats = _blocker.get_stats()
+        stats["currently_blocked"] = blocker_stats["currently_blocked"]
+        stats["total_blocks"] = blocker_stats["total_blocks"]
+    if _trust_manager:
+        trust_stats = _trust_manager.get_stats()
+        stats["total_tracked"] = trust_stats["total_tracked"]
+        stats["flagged"] = trust_stats["flagged"]
+        stats["blacklisted"] = trust_stats["blacklisted"]
     return jsonify(stats)
 
 

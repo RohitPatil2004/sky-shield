@@ -15,7 +15,6 @@ Algorithm:
      Count-Min sketch minimum across rows on the delta sketch
   3. IPs with the highest abnormality scores are likely bots
   4. Cross-reference with trust scores from TrustManager
-
 """
 
 import numpy as np
@@ -24,7 +23,7 @@ import time
 from collections import defaultdict
 from core.sketch import Sketch
 from core.bloom_filter import TrustManager
-from config import SKETCH_ROWS, SKETCH_COLS, REQUEST_RATE_LIMIT, SKETCH_WINDOW
+from config import SKETCH_ROWS, SKETCH_COLS, REQUEST_RATE_LIMIT, SKETCH_WINDOW, BLACKLIST_THRESHOLD
 
 
 class BotDetector:
@@ -115,20 +114,32 @@ class BotDetector:
         scored.sort(key=lambda x: x["abnormality_score"], reverse=True)
         top = scored[:top_n]
 
-        # Tag actions
+        # Tag actions — only for IPs with nonzero abnormality
         for entry in top:
             if entry["abnormality_score"] > 0:
-                if self.trust_manager.is_blacklisted(entry["ip"]):
+                ip = entry["ip"]
+
+                # Decrement trust proportional to abnormality score.
+                # Divisor=5: score of 60 → 12 hits × 10 decrement = -120 → trust=0 → BLOCK
+                # Normal IPs with score 3-7 → 1 hit × 10 = -10 → trust=90 → MONITOR
+                hits = max(1, int(entry["abnormality_score"] / 5))
+                for _ in range(hits):
+                    self.trust_manager.record_suspicious(ip)
+
+                # Re-fetch updated trust after decrement
+                entry["trust"] = self.trust_manager.get_trust(ip)
+                trust = entry["trust"]
+
+                # Assign action based on updated trust vs thresholds
+                if self.trust_manager.is_blacklisted(ip) or trust <= BLACKLIST_THRESHOLD:
                     entry["action"] = "BLOCK"
-                elif entry["trust"] <= 50:
+                elif trust <= 70:
                     entry["action"] = "CAPTCHA"
-                    self.trust_manager.record_suspicious(entry["ip"])
                 else:
                     entry["action"] = "MONITOR"
-                    self.trust_manager.record_suspicious(entry["ip"])
 
-                # Save to detected bots
-                self._detected_bots[entry["ip"]] = {
+                # Save to detected bots registry
+                self._detected_bots[ip] = {
                     **entry,
                     "detected_at": time.strftime("%H:%M:%S"),
                 }

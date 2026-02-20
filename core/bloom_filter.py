@@ -154,16 +154,22 @@ class TrustManager:
         self._block_expiry[ip] = time.time() + BLOCK_DURATION
 
     def is_blacklisted(self, ip: str) -> bool:
-        """Check if an IP is currently blacklisted (and block hasn't expired)."""
-        if ip not in self.blacklist:
-            return False
+        """Check if an IP is currently blacklisted (and block hasn't expired).
+
+        IMPORTANT: Bloom filters are append-only — once an IP is added, it stays
+        in the filter forever. We therefore check expiry BEFORE consulting the
+        Bloom filter. expiry == 0 means manual_unblock was called; treat as clear.
+        """
         expiry = self._block_expiry.get(ip, 0)
-        if time.time() > expiry:
-            # Block expired — remove from tracking but bloom filter retains it
-            # (Bloom filters don't support deletion in standard form)
-            self._trust[ip] = INITIAL_TRUST // 2  # partial recovery
+        if expiry == 0:
+            # Manually unblocked — override the Bloom filter
             return False
-        return True
+        if time.time() > expiry:
+            # Natural expiry — partial trust recovery
+            self._trust[ip] = INITIAL_TRUST // 2
+            return False
+        # Expiry is valid and in the future — confirm with Bloom filter
+        return ip in self.blacklist
 
     def is_whitelisted(self, ip: str) -> bool:
         """Check if an IP is whitelisted (trusted)."""
@@ -194,12 +200,11 @@ class TrustManager:
         blacklisted = [
             ip for ip in self._flagged_ips if self.is_blacklisted(ip)
         ]
-        whitelisted_count = len(self.whitelist)
         return {
             "total_tracked": len(self._trust),
             "flagged": len(self._flagged_ips),
             "blacklisted": len(blacklisted),
-            "whitelisted_approx": whitelisted_count,
+            "whitelisted_approx": len(self.whitelist),
             "blacklist_filter": repr(self.blacklist),
             "whitelist_filter": repr(self.whitelist),
         }
@@ -213,8 +218,19 @@ class TrustManager:
             self._flagged_ips.add(ip)
 
     def manual_unblock(self, ip: str):
-        """Manually remove a block (trust is partially restored)."""
+        """Manually remove a block — fully restore trust so the system doesn't
+        immediately re-blacklist the IP on the next sketch window.
+
+        Why full reset (not half)?
+        - BLACKLIST_THRESHOLD = 50, INITIAL_TRUST = 100
+        - Half reset → trust = 50, exactly at threshold — one hit re-blacklists
+        - Full reset → trust = 100, gives the IP a genuine second chance
+
+        Why expiry = 0?
+        - Bloom filters are append-only; we can't remove the IP from the filter
+        - is_blacklisted() checks expiry FIRST and returns False when expiry == 0
+        """
         with self._lock:
-            self._trust[ip] = INITIAL_TRUST // 2
-            self._block_expiry[ip] = 0
+            self._trust[ip] = INITIAL_TRUST    # full reset
+            self._block_expiry[ip] = 0          # sentinel: manually unblocked
             self._flagged_ips.discard(ip)
